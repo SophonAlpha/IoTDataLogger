@@ -3,4 +3,4 @@
 /Notes.txt
 /*.csv
 /*.xlsx
-"test data/*"
+test data/**/*
