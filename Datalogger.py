@@ -161,7 +161,7 @@ class CSV_InfluxDB_Importer:
 									 database=cfg['DBname'])
 			max_lines = len(self.data)
 			print("Schreibe {} Zeilen in die Datenbank.".format(max_lines))
-			lines_per_chunk = 3
+			lines_per_chunk = 1
 			lines_written = 0
 			for n, data_chunk in self.data.groupby(np.arange(len(self.data))//lines_per_chunk):
 				try:
