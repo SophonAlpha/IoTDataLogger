@@ -168,7 +168,7 @@ class CSV_InfluxDB_Importer:
 									 database=cfg['DBname'])
 			max_lines = len(self.data)
 			print("Schreibe {} Zeilen in die Datenbank.".format(max_lines))
-			lines_per_chunk = 1
+			lines_per_chunk = 500
 			lines_written = 0
 			for n, data_chunk in self.data.groupby(np.arange(len(self.data))//lines_per_chunk):
 				try:
@@ -176,7 +176,7 @@ class CSV_InfluxDB_Importer:
 					# as when reading from website
 					client.write_points(data_chunk, cfg['DBmeasurement'],
 										protocol='json')
-					lines_written = lines_written + n
+					lines_written = lines_written + len(data_chunk)
 					print("{}/{} Zeilen geschrieben.".format(lines_written, max_lines))
 				except requests.exceptions.ConnectionError as err:
 					print("Schreiben in Datenbank fehlgeschlagen. Fehlermeldung: '{}'.".format(err))
