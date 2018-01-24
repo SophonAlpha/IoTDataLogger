@@ -118,25 +118,32 @@ class CSV_InfluxDB_Importer:
 
 	def import_data(self):
 		self.data = pd.read_csv(self.CSV_file_name,
-						   header=0,
-						   index_col=0,
-						   parse_dates=True,
-						   infer_datetime_format=True,
-						   sep=';',
-						   decimal=',',
-						   encoding='utf-8')
+						   		header=0,
+						   		index_col=0,
+						   		parse_dates=True,
+						   		infer_datetime_format=True,
+						   		sep=';',
+						   		decimal=',',
+						   		dtype = str,
+						   		encoding='utf-8')
 		# remove unit columns
 		cols = [c for c in self.data.columns if c[:2]!=' .' and c!=' ']
 		self.data = self.data[cols]
 		# remove all 'Unnamed:' columns
 		self.data.drop(labels=[col for col in self.data.columns if 'Unnamed:' in col],
-				  axis=1, inplace=True)
+				  	   axis=1, inplace=True)
 		# map old to new column names
 		self.data.columns = self.map_old_to_new_column_names(self.data.columns)
-		# encode column names to 'utf-8'
-		self.data.columns = [col.encode('utf-8') for col in self.data.columns]
 		# set seconds to '00'
 		self.data.index = self.data.index.map(lambda x: x.replace(second=0))
+		# convert decimal character
+		self.data = self.data.replace({',': '.'}, regex=True)
+		# set 'NaN' to zero, required to convert column types
+		self.data = self.data.fillna(0)
+		# set column types
+		self.data = set_column_types(self.data)
+		# encode column names to 'utf-8'
+		self.data.columns = [col.encode('utf-8') for col in self.data.columns]
 		# TODO: calculate deltas
 		return self.data
 	
@@ -165,6 +172,8 @@ class CSV_InfluxDB_Importer:
 			lines_written = 0
 			for n, data_chunk in self.data.groupby(np.arange(len(self.data))//lines_per_chunk):
 				try:
+					# TODO: for CSV import check that column type are the same 
+					# as when reading from website
 					client.write_points(data_chunk, cfg['DBmeasurement'],
 										protocol='json')
 					lines_written = lines_written + n
