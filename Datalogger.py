@@ -19,8 +19,6 @@
 import argparse
 import re
 from bs4 import BeautifulSoup
-import os.path
-import codecs
 import httplib
 from mechanize import Browser
 import datetime
@@ -36,38 +34,34 @@ import numpy as np
 def main():
 	my_logger.info("========= Skript wurde gestartet ========================")
 	args = parse_args()
+	database = Database(host=cfg['DBhost'],
+						port=cfg['DBport'],
+						dbuser=cfg['DBuser'],
+						dbuser_password=cfg['DBuserPassword'],
+						dbname=cfg['DBname'],
+						dbmeasurement=cfg['DBmeasurement'])
 
+	# ---------- import from CSV file ----------
 	if args.import_from != None:
-		# TODO: test import
-		# get self.data from CSV file
-		CSV_importer = CSV_InfluxDB_Importer(args.import_from)
-		CSV_importer.import_data()
-		CSV_importer.write_to_database()
-		exit()
-		# TODO: test writing values with same time stamp to InfluxDB
-
+		my_logger.info("Importiere aus Datei '{}'.".format(args.import_from))
+		CSV_data = CSV_Data(args.import_from)
+		data_from_CSV = CSV_data.import_data()
+		database.write(data_from_CSV)
+	# ---------- export to CSV file ----------
 	if args.export_to != None:
 		# TODO: develop export
-		file_writer = CSV_Writer(DataFile=cfg['DataFile'])
-#		file_writer.write(data_for_export)
-		exit()
+		pass
+	# ---------- default: read from URL's ----------
+	if args.import_from == None and args.export_to == None:
+		tecalor = Tecalor()
+		youless = YouLess()
+		data = pd.concat([tecalor.read_measurements(cfg['TecalorDataURLs']),
+						  youless.read_measurements(cfg['YouLessMeters'])],
+						  axis=1)
+		data['Uhrzeit'] = pd.Timestamp(datetime.datetime.now())
+		data.set_index('Uhrzeit', inplace=True)
+		database.write(data)
 
-	tecalor = Tecalor()
-	data_from_Tecalor = tecalor.read_measurements(cfg['TecalorDataURLs'])
-	youless = YouLess()
-	data_from_YouLess = youless.read_measurements(cfg['YouLessMeters'])
-	data = pd.concat([data_from_Tecalor, data_from_YouLess], axis=1)
-	data['Uhrzeit'] = pd.Timestamp(datetime.datetime.now())
-	data.set_index('Uhrzeit', inplace=True)
-	data.columns = [col.encode('utf-8') for col in data.columns]
-#	self.data = add_delta_columns(self.data)
-	database_writer = InfluxDB_Writer(host=cfg['DBhost'],
-									  port=cfg['DBport'],
-									  dbuser=cfg['DBuser'],
-									  dbuser_password=cfg['DBuserPassword'],
-									  dbname=cfg['DBname'],
-									  dbmeasurement=cfg['DBmeasurement'])
-	database_writer.write(data)
 	my_logger.info("========= Skript wird beendet ===========================")	
 
 def parse_args():
@@ -82,35 +76,7 @@ def parse_args():
 						help='configuration file')
 	return parser.parse_args()
 
-def add_delta_columns(data):
-	delta_columns = configuration['delta_columns']
-	"""
-	Calculate delta values for cumulative measurements and add as new columns.
-	This is used, for example, for electricity consumption meter readings.
-	"""
-	pass
-
-class Config():
-	
-	def __init__(self):
-		args = parse_args()
-		with open(args.config, 'r') as f:
-			cfg = json.load(f)
-		self.TecalorUserName = cfg['TecalorUserName'] 
-		self.TecalorPassword = cfg['TecalorPassword']
-		self.TecalorLoginURL = cfg['TecalorLoginURL']
-		self.TecalorDataURLs = cfg['TecalorDataURLs']
-		self.YouLessMeters = cfg['YouLessMeters']
-		self.DataFile = cfg['DataFile']
-		self.LogFile = cfg['LogFile']
-		self.DBhost = cfg['DBhost']
-		self.DBport = cfg['DBport']
-		self.DBuser = cfg['DBuser']
-		self.DBuserPassword = cfg['DBuserPassword']
-		self.DBname = cfg['DBname']
-		self.DBmeasurement = cfg['DBmeasurement']
-
-class CSV_InfluxDB_Importer:
+class CSV_Data:
 	
 	def __init__(self, CSV_file_name):
 		self.CSV_file_name = CSV_file_name
@@ -133,21 +99,23 @@ class CSV_InfluxDB_Importer:
 		self.data.drop(labels=[col for col in self.data.columns if 'Unnamed:' in col],
 				  	   axis=1, inplace=True)
 		# map old to new column names
-		self.data.columns = self.map_old_to_new_column_names(self.data.columns)
+		self.data.columns = self.__map_old_to_new_column_names(self.data.columns)
 		# set seconds to '00'
 		self.data.index = self.data.index.map(lambda x: x.replace(second=0))
-		# convert decimal character
+		# fix multiple comma bug in YouLess meter columns
+		self.data['Haushaltstromzaehler - cnt'] = self.data[['Haushaltstromzaehler - cnt']].apply(self.__fix_comma_bug, axis=1)
+		self.data['Waermepumpenstromzaehler - cnt'] = self.data[['Waermepumpenstromzaehler - cnt']].apply(self.__fix_comma_bug, axis=1)
+		# convert decimal character ',' to '.'
 		self.data = self.data.replace({',': '.'}, regex=True)
 		# set 'NaN' to zero, required to convert column types
 		self.data = self.data.fillna(0)
 		# set column types
 		self.data = set_column_types(self.data)
-		# encode column names to 'utf-8'
+		# encode column names to 'utf-8', required before writing to database 
 		self.data.columns = [col.encode('utf-8') for col in self.data.columns]
-		# TODO: calculate deltas
 		return self.data
 	
-	def map_old_to_new_column_names(self, old_column_names):
+	def __map_old_to_new_column_names(self, old_column_names):
 		with open('old_new_column_map.json', 'r') as f:
 			old_to_new = json.load(f, encoding='utf-8')
 		new_column_names = []
@@ -159,32 +127,19 @@ class CSV_InfluxDB_Importer:
 			new_column_names.append(new_col)
 		return new_column_names
 	
-	def write_to_database(self):
-		if not self.data.empty:
-			client = DataFrameClient(host=cfg['DBhost'],
-									 port=cfg['DBport'],
-									 username=cfg['DBuser'],
-									 password=cfg['DBuserPassword'],
-									 database=cfg['DBname'])
-			max_lines = len(self.data)
-			print("Schreibe {} Zeilen in die Datenbank.".format(max_lines))
-			lines_per_chunk = 500
-			lines_written = 0
-			for n, data_chunk in self.data.groupby(np.arange(len(self.data))//lines_per_chunk):
-				try:
-					# TODO: for CSV import check that column type are the same 
-					# as when reading from website
-					client.write_points(data_chunk, cfg['DBmeasurement'],
-										protocol='json')
-					lines_written = lines_written + len(data_chunk)
-					print("{}/{} Zeilen geschrieben.".format(lines_written, max_lines))
-				except requests.exceptions.ConnectionError as err:
-					print("Schreiben in Datenbank fehlgeschlagen. Fehlermeldung: '{}'.".format(err))
-					break
-		else:
-			print("Keine Daten zum Schreiben in die Datenbank vorhanden.")
+	def __fix_comma_bug(self, row):
+		"""
+		Excel converted YouLess meter cnt values incorrectly. The conversion
+		generated float numbers with two ',' characters. E.g. '9,147,995' instead 
+		of '9147,995'. This function will remove all but the last comma character.
+		"""
+		for col in row:
+			loc = [m.start() for m in re.finditer(',', col)]
+			if len(loc) > 1:
+				new = col.replace(',', '', len(loc)-1)
+		return new
 
-class InfluxDB_Writer:
+class Database:
 
 	def __init__(self, host, port, dbuser, dbuser_password, dbname, dbmeasurement):
 		self.dbmeasurement = dbmeasurement
@@ -193,38 +148,27 @@ class InfluxDB_Writer:
 
 	def write(self, data):
 		if not data.empty:
-			my_logger.info("Schreibe {} Werte in die Datenbank.".format(len(data.columns)))
-			try:
-				self.client.write_points(data, self.dbmeasurement,
-									 	 protocol='json')
-				my_logger.info("Daten geschrieben.")
-			except requests.exceptions.ConnectionError as err:
-				my_logger.error("Schreiben in Datenbank fehlgeschlagen. Fehlermeldung: '{}'.".format(err))
+			no_lines = len(data)
+			no_values = len(data.columns)
+			print("Schreibe {} Zeilen mit je {} Werten in die Datenbank.".format(no_lines, no_values))
+			my_logger.info("Schreibe {} Zeilen mit je {} Werten in die Datenbank.".format(no_lines, no_values))
+			lines_per_chunk = 500
+			lines_written = 0
+			for n, data_chunk in data.groupby(np.arange(len(data))//lines_per_chunk):
+				try:
+					self.client.write_points(data_chunk, self.dbmeasurement,
+										 	 protocol='json')
+					lines_written = lines_written + len(data_chunk)
+					print("{}/{} Zeilen geschrieben.".format(lines_written, no_lines))
+					my_logger.info("{}/{} Zeilen geschrieben.".format(lines_written, no_lines))
+				except requests.exceptions.ConnectionError as err:
+					my_logger.error("Schreiben in Datenbank fehlgeschlagen. Fehlermeldung: '{}'.".format(err))
 		else:
 			my_logger.error("Keine Daten zum Schreiben in die Datenbank vorhanden.")
-
-class CSV_Writer:
-	
-	def __init__(self, dataFile):
-		self.dataFile = dataFile
-		
-	def write(self, keys, values, units):
-		my_logger.info("%i Messdaten werden in Datei geschrieben.", len(keys))
-		if os.path.exists(self.dataFile):
-			my_logger.info("Fuege Daten an existierende Datei an: %s", self.dataFile)
-			# Existing file. We only need to append the data.
-			f = codecs.open(self.dataFile, "a", "utf-8")
-		else:
-			my_logger.info("Keine bestehende Datei gefunden. \
-			                Schreibe Daten in neue Datei: %s", self.dataFile)
-			# New file. Write the table header.
-			f = codecs.open(self.dataFile, "w", "utf-8")
-			f.write("Uhrzeit; " + ";".join(v + "; " for i, v in enumerate(keys)) + "\n")
-		# Create the line with values and their units and write it  to the file.
-		data = [val for pair in zip(values, units) for val in pair]
-		timeNow = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-		f.write(timeNow + ";" + ";".join(data) + "\n")
-		f.close()
+			
+	def read(self):
+		# to be developed
+		pass
 
 class Tecalor:
 	
@@ -241,22 +185,22 @@ class Tecalor:
 				my_logger.info("Lese Tecalor Daten von Datei '%s'. "
 							   "Diese wird nur zu Testzwecken genutzt.", data_URL)
 				self.data = pd.concat([self.data,
-									   self.extract(data_URL)],
+									   self.__extract(data_URL)],
 									   axis=1)
 		else: # get the data from the Tecalor website
-			if self.connect_to_website(cfg['TecalorLoginURL']):
-				if self.login_to_website():
+			if self.__connect_to_website(cfg['TecalorLoginURL']):
+				if self.__login_to_website():
 					my_logger.info("Anmeldung an der Tecalor Webseite erfolgreich.")
 					for data_URL in data_URLs:
 						my_logger.info("Aufruf der Webseite mit den Messdaten: %s", data_URL)
 						self.data = pd.concat([self.data, 
-											   self.extract(data_URL)],
+											   self.__extract(data_URL)],
 											   axis=1)
 			else:
 				my_logger.error("Anmeldedialog der Tecalor Webseite nicht gefunden.")
 		return self.data
 
-	def connect_to_website(self, TecalorLoginURL):
+	def __connect_to_website(self, TecalorLoginURL):
 		my_logger.info("Verbinde zur Tecalor Webseite '%s'.", TecalorLoginURL)
 		login_form_found = False
 		try:
@@ -274,7 +218,7 @@ class Tecalor:
 				break
 		return login_form_found
 	
-	def login_to_website(self):
+	def __login_to_website(self):
 		my_logger.info("Tecalor Webseite gefunden. Versuche anzumelden.")
 		self.browser_obj["user"] = cfg['TecalorUserName']
 		self.browser_obj["pass"] = cfg['TecalorPassword']
@@ -285,7 +229,7 @@ class Tecalor:
 			return False
 		return True
 
-	def extract(self, data_URL):
+	def __extract(self, data_URL):
 		response = self.browser_obj.open(data_URL).read()
 		soup = BeautifulSoup(response, "lxml")
 		# A test to resonably ensure we have retrieved the web page with the
@@ -317,7 +261,7 @@ class Tecalor:
 						values.append(value.img["src"])
 						units.append("")
 					else:
-						# For any other value extract the value and ...
+						# For any other value __extract the value and ...
 						valueString = unicode(value.string)
 						m = temp_re.search(valueString)
 						if m != None:
@@ -345,12 +289,13 @@ class Tecalor:
 			my_logger.error("Webseite mit den Messdaten nicht gefunden.")	
 		# generate pandas data frame, to be ready for writing to InfluxDB
 		# 'units' are not used as of now, possibly for later use
-		data = pd.DataFrame(data=[values],
-			 			  	columns=keys)
+		data = pd.DataFrame(data=[values], columns=keys)
 		# convert decimal character
 		data = data.replace({',': '.'}, regex=True)
 		# set column types
 		data = set_column_types(data)
+		# encode column names to 'utf-8'
+		data.columns = [col.encode('utf-8') for col in data.columns]		
 		return data
 
 class YouLess:
@@ -388,20 +333,20 @@ class YouLess:
 				my_logger.info('{} Werte ausgelesen.'.format(len(result)))
 		# generate pandas data frame, to be ready for writing to InfluxDB
 		# 'units' are not used as of now, possibly for later use
-		self.data = pd.DataFrame(data=[values],
-						  					  columns=keys)
+		self.data = pd.DataFrame(data=[values], columns=keys)
 		# convert decimal character
 		self.data = self.data.replace({',': '.'}, regex=True)
 		# set column types
 		self.data = set_column_types(self.data)
+		# encode column names to 'utf-8'
+		self.data.columns = [col.encode('utf-8') for col in self.data.columns]		
 		return self.data
 
 def set_column_types(df):
 	column_types = configuration['column_types']
 	for col in df.columns:
 		df[col] = df[col].astype(column_types[col])
-		#TODO convert to list comprehension
-	return df # [df[col].astype(column_types[col]) for col in df.columns]
+	return df
 
 if __name__ == "__main__":
 	# get script configuration
@@ -418,5 +363,5 @@ if __name__ == "__main__":
 												   backupCount=1)
 	handler.setFormatter(formatter)
 	my_logger.addHandler(handler)
-
+	# off we go!
 	main()
