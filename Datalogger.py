@@ -76,6 +76,13 @@ def parse_args():
 						help='configuration file')
 	return parser.parse_args()
 
+def dateparse(dates):
+	if '/' in dates[0]:
+		d = [pd.datetime.strptime(date, '%d/%m/%Y %H:%M') for date in dates]
+	if '-' in dates[0]:
+		d = [pd.datetime.strptime(date, '%Y-%m-%d %H:%M:%S') for date in dates]			
+	return d
+
 class CSV_Data:
 	
 	def __init__(self, CSV_file_name):
@@ -87,7 +94,7 @@ class CSV_Data:
 						   		header=0,
 						   		index_col=0,
 						   		parse_dates=True,
-						   		infer_datetime_format=True,
+						   		date_parser=dateparse,
 						   		sep=';',
 						   		decimal=',',
 						   		dtype = str,
@@ -134,9 +141,11 @@ class CSV_Data:
 		of '9147,995'. This function will remove all but the last comma character.
 		"""
 		for col in row:
-			loc = [m.start() for m in re.finditer(',', col)]
-			if len(loc) > 1:
-				new = col.replace(',', '', len(loc)-1)
+			new = col
+			if not(pd.isnull(col)):
+				loc = [m.start() for m in re.finditer(',', col)]
+				if len(loc) > 1:
+					new = col.replace(',', '', len(loc)-1)
 		return new
 
 class Database:
@@ -154,7 +163,7 @@ class Database:
 			my_logger.info("Schreibe {} Zeilen mit je {} Werten in die Datenbank.".format(no_lines, no_values))
 			lines_per_chunk = 500
 			lines_written = 0
-			for n, data_chunk in data.groupby(np.arange(len(data))//lines_per_chunk):
+			for _, data_chunk in data.groupby(np.arange(len(data))//lines_per_chunk):
 				try:
 					self.client.write_points(data_chunk, self.dbmeasurement,
 										 	 protocol='json')
