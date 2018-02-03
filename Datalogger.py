@@ -17,6 +17,7 @@
 #-------------------------------------------------------------------------------
 
 import argparse
+import os.path
 import re
 from bs4 import BeautifulSoup
 import httplib
@@ -60,6 +61,7 @@ def main():
 						  axis=1)
 		data['Uhrzeit'] = pd.Timestamp(datetime.datetime.now())
 		data.set_index('Uhrzeit', inplace=True)
+		data = add_delta_value_columns(data)
 		database.write(data)
 
 	my_logger.info("========= Skript wird beendet ===========================")	
@@ -82,6 +84,17 @@ def dateparse(dates):
 	if '-' in dates[0]:
 		d = [pd.datetime.strptime(date, '%Y-%m-%d %H:%M:%S') for date in dates]			
 	return d
+
+def add_delta_value_columns(data):
+	previous_readings = pd.DataFrame()
+	pickle_file = 'previous_readings.pickle'
+	if os.path.isfile(pickle_file):
+		previous_readings = pd.read_pickle(pickle_file)
+	data.to_pickle(pickle_file)
+	data = previous_readings.append(data)
+	data = calculate_delta_values(data)
+	data = data.drop(data.index[0]) # remove the row with the previous reading
+	return data
 
 class CSV_Data:
 	
@@ -118,6 +131,10 @@ class CSV_Data:
 		self.data = self.data.fillna(0)
 		# set column types
 		self.data = set_column_types(self.data)
+		# calculate delta values
+		self.data = calculate_delta_values(self.data)
+		# set column types
+		self.data = set_column_types(self.data)
 		# encode column names to 'utf-8', required before writing to database 
 		self.data.columns = [col.encode('utf-8') for col in self.data.columns]
 		return self.data
@@ -147,6 +164,20 @@ class CSV_Data:
 				if len(loc) > 1:
 					new = col.replace(',', '', len(loc)-1)
 		return new
+	
+def calculate_delta_values(data):
+	"""
+	A number of values are steadily increasing values. These values are 
+	defined in section "delta_columns" in the script configuration file.
+	In this function we calculate the difference to get the rate of change.
+	"""
+	delta_columns = [c.encode('utf-8') for c in configuration['delta_columns']]
+	for c in delta_columns:
+		if c in data.columns:
+			delta_col_name = c + ' - delta'
+			data[delta_col_name] = data[c].diff()
+	data = data.fillna(value=0)
+	return data
 
 class Database:
 
