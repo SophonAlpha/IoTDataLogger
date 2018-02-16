@@ -5,3 +5,5 @@
 /*.xlsx
 "test data/**/*"
 /Smart Home-1517051060214.json
+InfluxDB_backup.tar.gz
+previous_readings.pickle
