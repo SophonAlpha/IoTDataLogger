@@ -61,7 +61,14 @@ def main():
 						  axis=1)
 		data['Uhrzeit'] = pd.Timestamp(datetime.datetime.now())
 		data.set_index('Uhrzeit', inplace=True)
+		# set column types
+		data = set_column_types(data)
+		# calculate delta values
 		data = add_delta_value_columns(data)
+		# set column types
+		data = set_column_types(data)
+		# encode column names to 'utf-8', required before writing to database 
+		data.columns = [col.encode('utf-8') for col in data.columns]
 		database.write(data)
 
 	my_logger.info("========= Skript wird beendet ===========================")	
@@ -70,7 +77,7 @@ def parse_args():
 	""" Parse the args from main. """
 	parser = argparse.ArgumentParser(description='Read, import and export smart home self.data.')
 	parser.add_argument('-i', '--import_from', type=str,
-						help='name of CSV file with smart home self.data for import to database')
+						help='name of CSV file with smart home data for import to database')
 	parser.add_argument('-e', '--export_to', type=str,
 						help='file name for CSV export from database')
 	parser.add_argument('-c', '--config', type=str,
@@ -332,10 +339,10 @@ class Tecalor:
 		data = pd.DataFrame(data=[values], columns=keys)
 		# convert decimal character
 		data = data.replace({',': '.'}, regex=True)
-		# set column types
-		data = set_column_types(data)
-		# encode column names to 'utf-8'
-		data.columns = [col.encode('utf-8') for col in data.columns]		
+###		# set column types
+###		data = set_column_types(data)
+###		# encode column names to 'utf-8'
+###		data.columns = [col.encode('utf-8') for col in data.columns]		
 		return data
 
 class YouLess:
@@ -376,10 +383,10 @@ class YouLess:
 		self.data = pd.DataFrame(data=[values], columns=keys)
 		# convert decimal character
 		self.data = self.data.replace({',': '.'}, regex=True)
-		# set column types
-		self.data = set_column_types(self.data)
-		# encode column names to 'utf-8'
-		self.data.columns = [col.encode('utf-8') for col in self.data.columns]		
+###		# set column types
+###		self.data = set_column_types(self.data)
+###		# encode column names to 'utf-8'
+###		self.data.columns = [col.encode('utf-8') for col in self.data.columns]		
 		return self.data
 
 def set_column_types(df):
